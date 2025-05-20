@@ -1,0 +1,16 @@
+# This file is auto-generated using uv
+# To regenerate, run: uv pip compile pyproject.toml -o requirements.txt
+
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+httpx>=0.24.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-dotenv>=1.0.0
+pyOpenSSL>=23.2.0
+pymongo>=4.4.1
+pydantic-settings>=2.0.0
