@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>테스트 대시보드</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .test-item {
+            border-left: 4px solid #ccc;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background-color: #f8f9fa;
+        }
+        .test-item.passed {
+            border-left-color: #28a745;
+        }
+        .test-item.failed {
+            border-left-color: #dc3545;
+        }
+        .test-item.skipped {
+            border-left-color: #ffc107;
+        }
+        .test-item.running {
+            border-left-color: #17a2b8;
+        }
+        .test-details {
+            display: none;
+            margin-top: 1rem;
+            padding: 1rem;
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 0.25rem;
+        }
+        .test-details.show {
+            display: block;
+        }
+        .progress {
+            height: 0.5rem;
+        }
+        .websocket-status {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+        }
+        .websocket-status.connected {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .websocket-status.disconnected {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid py-4">
+        <div class="row mb-4">
+            <div class="col">
+                <h1>테스트 대시보드</h1>
+            </div>
+            <div class="col-auto">
+                <div class="d-flex gap-2">
+                    <select class="form-select" id="collectionSelect">
+                        <option value="">Collection 선택</option>
+                    </select>
+                    <button class="btn btn-primary" id="runTestBtn" disabled>
+                        <i class="bi bi-play-fill"></i> 테스트 실행
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">테스트 통계</h5>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>전체 테스트:</span>
+                            <span id="totalTests">0</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>성공:</span>
+                            <span id="passedTests" class="text-success">0</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>실패:</span>
+                            <span id="failedTests" class="text-danger">0</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>건너뜀:</span>
+                            <span id="skippedTests" class="text-warning">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-9">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">진행 상황</h5>
+                        <div class="progress mb-2">
+                            <div id="progressBar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span id="progressText">0%</span>
+                            <span id="elapsedTime">00:00:00</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">테스트 결과</h5>
+                        <div id="testResults"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="websocketStatus" class="websocket-status disconnected">
+        <i class="bi bi-circle-fill"></i> WebSocket 연결 끊김
+    </div>
+
+    <script>
+        let ws = null;
+        let startTime = null;
+        let testResults = new Map();
+        let totalTests = 0;
+        let completedTests = 0;
+        let collections = [];
+
+        async function loadCollections() {
+            try {
+                const response = await fetch('/api/v1/postman/collections');
+                const data = await response.json();
+                collections = data;
+                
+                const select = document.getElementById('collectionSelect');
+                select.innerHTML = '<option value="">Collection 선택</option>';
+                
+                collections.forEach(collection => {
+                    const option = document.createElement('option');
+                    option.value = collection.collection_id;
+                    option.textContent = collection.name;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading collections:', error);
+            }
+        }
+
+        document.getElementById('collectionSelect').addEventListener('change', (e) => {
+            document.getElementById('runTestBtn').disabled = !e.target.value;
+        });
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/mcp/ws`;
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                document.getElementById('websocketStatus').className = 'websocket-status connected';
+                document.getElementById('websocketStatus').innerHTML = '<i class="bi bi-circle-fill"></i> WebSocket 연결됨';
+            };
+            
+            ws.onclose = () => {
+                document.getElementById('websocketStatus').className = 'websocket-status disconnected';
+                document.getElementById('websocketStatus').innerHTML = '<i class="bi bi-circle-fill"></i> WebSocket 연결 끊김';
+                setTimeout(connectWebSocket, 5000);
+            };
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                handleWebSocketMessage(message);
+            };
+        }
+
+        function handleWebSocketMessage(message) {
+            if (message.message_type === 'event') {
+                switch (message.event_type) {
+                    case 'test_started':
+                        handleTestStarted(message.data);
+                        break;
+                    case 'test_item_started':
+                        handleTestItemStarted(message.data);
+                        break;
+                    case 'test_item_completed':
+                        handleTestItemCompleted(message.data);
+                        break;
+                    case 'test_completed':
+                        handleTestCompleted(message.data);
+                        break;
+                    case 'test_failed':
+                        handleTestFailed(message.data);
+                        break;
+                }
+            }
+        }
+
+        function handleTestStarted(data) {
+            startTime = new Date();
+            testResults.clear();
+            document.getElementById('testResults').innerHTML = '';
+            document.getElementById('totalTests').textContent = '0';
+            document.getElementById('passedTests').textContent = '0';
+            document.getElementById('failedTests').textContent = '0';
+            document.getElementById('skippedTests').textContent = '0';
+            document.getElementById('progressBar').style.width = '0%';
+            document.getElementById('progressText').textContent = '0%';
+            updateElapsedTime();
+        }
+
+        function handleTestItemStarted(data) {
+            const testItem = createTestItem(data);
+            document.getElementById('testResults').appendChild(testItem);
+            testResults.set(data.item_name, {
+                element: testItem,
+                status: 'running'
+            });
+            totalTests++;
+            document.getElementById('totalTests').textContent = totalTests;
+        }
+
+        function handleTestItemCompleted(data) {
+            const testResult = testResults.get(data.item_name);
+            if (testResult) {
+                testResult.element.className = `test-item ${data.test_status}`;
+                testResult.element.querySelector('.test-status').textContent = data.test_status.toUpperCase();
+                testResult.element.querySelector('.test-message').textContent = data.test_message;
+                testResult.element.querySelector('.test-duration').textContent = `${data.duration}ms`;
+                testResult.status = data.test_status;
+                
+                completedTests++;
+                updateProgress();
+                
+                if (data.test_status === 'passed') {
+                    document.getElementById('passedTests').textContent = 
+                        parseInt(document.getElementById('passedTests').textContent) + 1;
+                } else if (data.test_status === 'failed') {
+                    document.getElementById('failedTests').textContent = 
+                        parseInt(document.getElementById('failedTests').textContent) + 1;
+                } else {
+                    document.getElementById('skippedTests').textContent = 
+                        parseInt(document.getElementById('skippedTests').textContent) + 1;
+                }
+            }
+        }
+
+        function handleTestCompleted(data) {
+            clearInterval(elapsedTimeInterval);
+            document.getElementById('progressBar').style.width = '100%';
+            document.getElementById('progressText').textContent = '100%';
+        }
+
+        function handleTestFailed(data) {
+            clearInterval(elapsedTimeInterval);
+            document.getElementById('progressBar').className = 'progress-bar bg-danger';
+            document.getElementById('progressBar').style.width = '100%';
+            document.getElementById('progressText').textContent = '실패';
+        }
+
+        function createTestItem(data) {
+            const div = document.createElement('div');
+            div.className = 'test-item running';
+            div.innerHTML = `
+                <div class="d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">${data.item_name}</h6>
+                    <div>
+                        <span class="badge bg-info test-status">RUNNING</span>
+                        <span class="test-duration ms-2">-</span>
+                    </div>
+                </div>
+                <div class="test-message text-muted mt-2"></div>
+                <div class="test-details">
+                    <pre class="mb-0"><code></code></pre>
+                </div>
+            `;
+            
+            div.querySelector('h6').addEventListener('click', () => {
+                const details = div.querySelector('.test-details');
+                details.classList.toggle('show');
+            });
+            
+            return div;
+        }
+
+        function updateProgress() {
+            const progress = (completedTests / totalTests) * 100;
+            document.getElementById('progressBar').style.width = `${progress}%`;
+            document.getElementById('progressText').textContent = `${Math.round(progress)}%`;
+        }
+
+        let elapsedTimeInterval;
+        function updateElapsedTime() {
+            if (elapsedTimeInterval) {
+                clearInterval(elapsedTimeInterval);
+            }
+            
+            elapsedTimeInterval = setInterval(() => {
+                if (startTime) {
+                    const now = new Date();
+                    const diff = now - startTime;
+                    const hours = Math.floor(diff / 3600000);
+                    const minutes = Math.floor((diff % 3600000) / 60000);
+                    const seconds = Math.floor((diff % 60000) / 1000);
+                    document.getElementById('elapsedTime').textContent = 
+                        `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }
+            }, 1000);
+        }
+
+        document.getElementById('runTestBtn').addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const collectionId = document.getElementById('collectionSelect').value;
+                if (!collectionId) return;
+                
+                ws.send(JSON.stringify({
+                    message_type: 'request',
+                    content: {
+                        action: 'run_test',
+                        request_id: Date.now().toString(),
+                        params: {
+                            collection_id: parseInt(collectionId)
+                        }
+                    }
+                }));
+            }
+        });
+
+        connectWebSocket();
+        loadCollections();
+    </script>
+</body>
+</html> 

@@ -12,6 +12,7 @@ import newman
 from app.models.postman import PostmanCollection, PostmanEnvironment, PostmanTestData
 from app.models.test_run import TestRun, TestResult
 from app.core.mcp_protocol import mcp_protocol
+from app.core.mcp_handler import mcp_handler
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,16 @@ class TestHandler:
             await db.commit()
             await db.refresh(test_run)
             
+            # 테스트 시작 이벤트 전송
+            await self._send_test_event("test_started", {
+                "test_run_id": test_run.test_run_id,
+                "collection_id": collection_id,
+                "environment_id": environment_id,
+                "test_data_id": test_data_id,
+                "user_id": user_id,
+                "start_time": test_run.start_time.isoformat()
+            })
+            
             # 비동기로 테스트 실행
             asyncio.create_task(self._execute_test(db, test_run, collection, environment, test_data))
             
@@ -152,6 +163,49 @@ class TestHandler:
                 
                 # Newman 실행
                 runner = newman.Newman(options)
+                
+                # 테스트 진행 상황 모니터링
+                async def on_test_start(item):
+                    await self._send_test_event("test_item_started", {
+                        "test_run_id": test_run.test_run_id,
+                        "item_name": item.get("name", "Unknown Request"),
+                        "start_time": datetime.now().isoformat()
+                    })
+                
+                async def on_test_end(item, result):
+                    test_result = TestResult(
+                        test_run_id=test_run.test_run_id,
+                        request_name=item.get("name", "Unknown Request"),
+                        request_url=result.get("request", {}).get("url", {}).get("raw", ""),
+                        request_method=result.get("request", {}).get("method", ""),
+                        request_headers=result.get("request", {}).get("header", []),
+                        request_body=result.get("request", {}).get("body", {}).get("raw", ""),
+                        response_status=result.get("response", {}).get("code"),
+                        response_headers=result.get("response", {}).get("header", []),
+                        response_body=result.get("response", {}).get("body", ""),
+                        test_status="passed" if result.get("test", {}).get("status") == "passed" else "failed",
+                        test_message=result.get("test", {}).get("message", ""),
+                        test_script=result.get("test", {}).get("script", ""),
+                        test_script_result=result.get("test", {}).get("result", ""),
+                        start_time=datetime.fromtimestamp(result.get("startedAt", 0) / 1000),
+                        end_time=datetime.fromtimestamp(result.get("endedAt", 0) / 1000),
+                        duration=result.get("endedAt", 0) - result.get("startedAt", 0)
+                    )
+                    db.add(test_result)
+                    await db.commit()
+                    
+                    await self._send_test_event("test_item_completed", {
+                        "test_run_id": test_run.test_run_id,
+                        "item_name": item.get("name", "Unknown Request"),
+                        "test_status": test_result.test_status,
+                        "test_message": test_result.test_message,
+                        "duration": test_result.duration,
+                        "end_time": test_result.end_time.isoformat()
+                    })
+                
+                runner.on("test_start", on_test_start)
+                runner.on("test_end", on_test_end)
+                
                 summary = await runner.run()
                 
                 # 결과 처리
@@ -165,35 +219,44 @@ class TestHandler:
                 test_run.failed_tests = run_summary.get("stats", {}).get("assertions", {}).get("failed", 0)
                 test_run.skipped_tests = run_summary.get("stats", {}).get("assertions", {}).get("skipped", 0)
                 
-                # 개별 테스트 결과 저장
-                for execution in run_summary.get("executions", []):
-                    test_result = TestResult(
-                        test_run_id=test_run.test_run_id,
-                        request_name=execution.get("item", {}).get("name", "Unknown Request"),
-                        request_url=execution.get("request", {}).get("url", {}).get("raw", ""),
-                        request_method=execution.get("request", {}).get("method", ""),
-                        request_headers=execution.get("request", {}).get("header", []),
-                        request_body=execution.get("request", {}).get("body", {}).get("raw", ""),
-                        response_status=execution.get("response", {}).get("code"),
-                        response_headers=execution.get("response", {}).get("header", []),
-                        response_body=execution.get("response", {}).get("body", ""),
-                        test_status="passed" if execution.get("test", {}).get("status") == "passed" else "failed",
-                        test_message=execution.get("test", {}).get("message", ""),
-                        test_script=execution.get("test", {}).get("script", ""),
-                        test_script_result=execution.get("test", {}).get("result", ""),
-                        start_time=datetime.fromtimestamp(execution.get("startedAt", 0) / 1000),
-                        end_time=datetime.fromtimestamp(execution.get("endedAt", 0) / 1000),
-                        duration=execution.get("endedAt", 0) - execution.get("startedAt", 0)
-                    )
-                    db.add(test_result)
-                
                 await db.commit()
+                
+                # 테스트 완료 이벤트 전송
+                await self._send_test_event("test_completed", {
+                    "test_run_id": test_run.test_run_id,
+                    "status": test_run.status,
+                    "total_tests": test_run.total_tests,
+                    "passed_tests": test_run.passed_tests,
+                    "failed_tests": test_run.failed_tests,
+                    "skipped_tests": test_run.skipped_tests,
+                    "end_time": test_run.end_time.isoformat()
+                })
                 
         except Exception as e:
             logger.error(f"Error executing test: {str(e)}")
             test_run.status = "failed"
             test_run.end_time = datetime.now()
             await db.commit()
+            
+            # 테스트 실패 이벤트 전송
+            await self._send_test_event("test_failed", {
+                "test_run_id": test_run.test_run_id,
+                "error": str(e),
+                "end_time": test_run.end_time.isoformat()
+            })
+    
+    async def _send_test_event(self, event_type: str, data: Dict[str, Any]):
+        """
+        테스트 이벤트 전송
+        
+        :param event_type: 이벤트 타입
+        :param data: 이벤트 데이터
+        """
+        try:
+            event = mcp_protocol.create_event(event_type, data)
+            await mcp_handler.connection_manager.broadcast(event)
+        except Exception as e:
+            logger.error(f"Error sending test event: {str(e)}")
     
     async def get_test_run(
         self,
