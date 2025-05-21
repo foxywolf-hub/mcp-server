@@ -13,3 +13,4 @@ class User(Base):
     # 관계 정의
     collections = relationship("ApiTestCollection", back_populates="user")
     test_runs = relationship("ApiTestRun", back_populates="user")
+    postman_collections = relationship("PostmanCollection", back_populates="user")

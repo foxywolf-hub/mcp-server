@@ -2,8 +2,11 @@ from typing import Dict, Any, Callable, Awaitable, List, Optional, Type
 import json
 import logging
 from fastapi import WebSocket, WebSocketDisconnect
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.mcp_protocol import mcp_protocol
+from app.core.postman_handler import postman_handler
+from app.api import deps
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,7 @@ class MCPConnectionManager:
     
     async def broadcast(self, message: Dict[str, Any]):
         """
-        모든 클라이언트에게 메세지 브로드캩0스트
+        모든 클라이언트에게 메세지 브로드캐스트
         """
         for connection in self.active_connections:
             await connection.send_json(message)
@@ -50,6 +53,11 @@ class MCPHandler:
         self.connection_manager = MCPConnectionManager()
         # 작업 핸들러 등록
         self.action_handlers: Dict[str, Callable[[Dict[str, Any], WebSocket], Awaitable[Dict[str, Any]]]] = {}
+        
+        # Postman 관련 작업 핸들러 등록
+        self.register_handler("upload_collection", self._handle_upload_collection)
+        self.register_handler("upload_environment", self._handle_upload_environment)
+        self.register_handler("upload_test_data", self._handle_upload_test_data)
     
     def register_handler(self, action: str, handler: Callable[[Dict[str, Any], WebSocket], Awaitable[Dict[str, Any]]]):
         """
@@ -152,6 +160,99 @@ class MCPHandler:
                 f"Unsupported action: {action}"
             )
             await self.connection_manager.send_message(websocket, error_message)
+    
+    async def _handle_upload_collection(self, params: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
+        """
+        Collection 업로드 처리
+        
+        :param params: 요청 파라미터
+        :param websocket: WebSocket 연결
+        :return: 처리 결과
+        """
+        try:
+            # 파라미터 검증
+            required_params = ["name", "collection_data"]
+            for param in required_params:
+                if param not in params:
+                    raise ValueError(f"Missing required parameter: {param}")
+            
+            # 데이터베이스 세션 생성
+            async with deps.get_db() as db:
+                # Collection 처리
+                result = await postman_handler.process_collection(
+                    db=db,
+                    collection_data=params["collection_data"],
+                    name=params["name"],
+                    description=params.get("description"),
+                    user_id=params.get("user_id", 1)  # 기본값 1 (임시)
+                )
+                
+                return result
+        except Exception as e:
+            logger.error(f"Error handling upload_collection: {str(e)}")
+            raise
+    
+    async def _handle_upload_environment(self, params: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
+        """
+        Environment 업로드 처리
+        
+        :param params: 요청 파라미터
+        :param websocket: WebSocket 연결
+        :return: 처리 결과
+        """
+        try:
+            # 파라미터 검증
+            required_params = ["name", "environment_data", "collection_id"]
+            for param in required_params:
+                if param not in params:
+                    raise ValueError(f"Missing required parameter: {param}")
+            
+            # 데이터베이스 세션 생성
+            async with deps.get_db() as db:
+                # Environment 처리
+                result = await postman_handler.process_environment(
+                    db=db,
+                    environment_data=params["environment_data"],
+                    name=params["name"],
+                    description=params.get("description"),
+                    collection_id=params["collection_id"]
+                )
+                
+                return result
+        except Exception as e:
+            logger.error(f"Error handling upload_environment: {str(e)}")
+            raise
+    
+    async def _handle_upload_test_data(self, params: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
+        """
+        Test Data 업로드 처리
+        
+        :param params: 요청 파라미터
+        :param websocket: WebSocket 연결
+        :return: 처리 결과
+        """
+        try:
+            # 파라미터 검증
+            required_params = ["name", "test_data", "collection_id"]
+            for param in required_params:
+                if param not in params:
+                    raise ValueError(f"Missing required parameter: {param}")
+            
+            # 데이터베이스 세션 생성
+            async with deps.get_db() as db:
+                # Test Data 처리
+                result = await postman_handler.process_test_data(
+                    db=db,
+                    test_data=params["test_data"],
+                    name=params["name"],
+                    description=params.get("description"),
+                    collection_id=params["collection_id"]
+                )
+                
+                return result
+        except Exception as e:
+            logger.error(f"Error handling upload_test_data: {str(e)}")
+            raise
 
 # 싱글톤 인스턴스
 mcp_handler = MCPHandler()
