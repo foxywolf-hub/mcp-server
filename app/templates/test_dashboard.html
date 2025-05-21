@@ -36,6 +36,37 @@
         .test-details.show {
             display: block;
         }
+        .test-details pre {
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+        }
+        .test-details .nav-tabs {
+            margin-bottom: 1rem;
+        }
+        .test-details .tab-content {
+            padding: 1rem;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-top: none;
+            border-radius: 0 0 0.25rem 0.25rem;
+        }
+        .test-details .request-info {
+            margin-bottom: 1rem;
+        }
+        .test-details .request-info .badge {
+            margin-right: 0.5rem;
+        }
+        .test-details .test-script {
+            margin-top: 1rem;
+        }
+        .test-details .test-script .passed {
+            color: #28a745;
+        }
+        .test-details .test-script .failed {
+            color: #dc3545;
+        }
         .progress {
             height: 0.5rem;
         }
@@ -68,6 +99,12 @@
                 <div class="d-flex gap-2">
                     <select class="form-select" id="collectionSelect">
                         <option value="">Collection 선택</option>
+                    </select>
+                    <select class="form-select" id="environmentSelect" disabled>
+                        <option value="">Environment 선택</option>
+                    </select>
+                    <select class="form-select" id="testDataSelect" disabled>
+                        <option value="">테스트 데이터 선택</option>
                     </select>
                     <button class="btn btn-primary" id="runTestBtn" disabled>
                         <i class="bi bi-play-fill"></i> 테스트 실행
@@ -139,6 +176,8 @@
         let totalTests = 0;
         let completedTests = 0;
         let collections = [];
+        let environments = [];
+        let testDataList = [];
 
         async function loadCollections() {
             try {
@@ -160,8 +199,72 @@
             }
         }
 
+        async function loadEnvironments() {
+            try {
+                const response = await fetch('/api/v1/postman/environments');
+                const data = await response.json();
+                environments = data;
+                
+                const select = document.getElementById('environmentSelect');
+                select.innerHTML = '<option value="">Environment 선택</option>';
+                
+                environments.forEach(env => {
+                    const option = document.createElement('option');
+                    option.value = env.environment_id;
+                    option.textContent = env.name;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading environments:', error);
+            }
+        }
+
+        async function loadTestData() {
+            try {
+                const response = await fetch('/api/v1/postman/test-data');
+                const data = await response.json();
+                testDataList = data;
+                
+                const select = document.getElementById('testDataSelect');
+                select.innerHTML = '<option value="">테스트 데이터 선택</option>';
+                
+                testDataList.forEach(testData => {
+                    const option = document.createElement('option');
+                    option.value = testData.test_data_id;
+                    option.textContent = testData.name;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading test data:', error);
+            }
+        }
+
         document.getElementById('collectionSelect').addEventListener('change', (e) => {
-            document.getElementById('runTestBtn').disabled = !e.target.value;
+            const environmentSelect = document.getElementById('environmentSelect');
+            const testDataSelect = document.getElementById('testDataSelect');
+            const runTestBtn = document.getElementById('runTestBtn');
+            
+            if (e.target.value) {
+                environmentSelect.disabled = false;
+                testDataSelect.disabled = false;
+                runTestBtn.disabled = !(environmentSelect.value && testDataSelect.value);
+            } else {
+                environmentSelect.disabled = true;
+                testDataSelect.disabled = true;
+                runTestBtn.disabled = true;
+            }
+        });
+
+        document.getElementById('environmentSelect').addEventListener('change', (e) => {
+            const testDataSelect = document.getElementById('testDataSelect');
+            const runTestBtn = document.getElementById('runTestBtn');
+            runTestBtn.disabled = !(e.target.value && testDataSelect.value);
+        });
+
+        document.getElementById('testDataSelect').addEventListener('change', (e) => {
+            const environmentSelect = document.getElementById('environmentSelect');
+            const runTestBtn = document.getElementById('runTestBtn');
+            runTestBtn.disabled = !(e.target.value && environmentSelect.value);
         });
 
         function connectWebSocket() {
@@ -242,6 +345,69 @@
                 testResult.element.querySelector('.test-duration').textContent = `${data.duration}ms`;
                 testResult.status = data.test_status;
                 
+                // 요청/응답 정보 업데이트
+                const requestInfo = testResult.element.querySelector(`#request-${data.item_name}`);
+                if (requestInfo && data.request) {
+                    requestInfo.innerHTML = `
+                        <div class="request-info">
+                            <div class="mb-2">
+                                <span class="badge bg-primary">${data.request.method}</span>
+                                <span class="badge bg-secondary">${data.request.url}</span>
+                            </div>
+                            <div class="mb-2">
+                                <strong>Headers:</strong>
+                                <pre><code>${JSON.stringify(data.request.headers, null, 2)}</code></pre>
+                            </div>
+                            ${data.request.body ? `
+                            <div>
+                                <strong>Body:</strong>
+                                <pre><code>${JSON.stringify(data.request.body, null, 2)}</code></pre>
+                            </div>
+                            ` : ''}
+                        </div>
+                    `;
+                }
+
+                const responseInfo = testResult.element.querySelector(`#response-${data.item_name}`);
+                if (responseInfo && data.response) {
+                    responseInfo.innerHTML = `
+                        <div class="response-info">
+                            <div class="mb-2">
+                                <span class="badge bg-${data.response.status >= 200 && data.response.status < 300 ? 'success' : 'danger'}">${data.response.status}</span>
+                                <span class="badge bg-secondary">${data.response.statusText}</span>
+                            </div>
+                            <div class="mb-2">
+                                <strong>Headers:</strong>
+                                <pre><code>${JSON.stringify(data.response.headers, null, 2)}</code></pre>
+                            </div>
+                            <div>
+                                <strong>Body:</strong>
+                                <pre><code>${JSON.stringify(data.response.body, null, 2)}</code></pre>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const testScript = testResult.element.querySelector(`#test-script-${data.item_name}`);
+                if (testScript && data.test_script) {
+                    testScript.innerHTML = `
+                        <div class="test-script">
+                            <div class="mb-2">
+                                <strong>스크립트:</strong>
+                                <pre><code>${data.test_script}</code></pre>
+                            </div>
+                            ${data.test_results ? `
+                            <div>
+                                <strong>결과:</strong>
+                                <pre><code>${data.test_results.map(result => 
+                                    `<span class="${result.passed ? 'passed' : 'failed'}">${result.message}</span>`
+                                ).join('\n')}</code></pre>
+                            </div>
+                            ` : ''}
+                        </div>
+                    `;
+                }
+                
                 completedTests++;
                 updateProgress();
                 
@@ -284,7 +450,71 @@
                 </div>
                 <div class="test-message text-muted mt-2"></div>
                 <div class="test-details">
-                    <pre class="mb-0"><code></code></pre>
+                    <ul class="nav nav-tabs" role="tablist">
+                        <li class="nav-item">
+                            <a class="nav-link active" data-bs-toggle="tab" href="#request-${data.item_name}" role="tab">요청 정보</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" data-bs-toggle="tab" href="#response-${data.item_name}" role="tab">응답 정보</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" data-bs-toggle="tab" href="#test-script-${data.item_name}" role="tab">테스트 스크립트</a>
+                        </li>
+                    </ul>
+                    <div class="tab-content">
+                        <div class="tab-pane fade show active" id="request-${data.item_name}" role="tabpanel">
+                            <div class="request-info">
+                                <div class="mb-2">
+                                    <span class="badge bg-primary">${data.request.method}</span>
+                                    <span class="badge bg-secondary">${data.request.url}</span>
+                                </div>
+                                <div class="mb-2">
+                                    <strong>Headers:</strong>
+                                    <pre><code>${JSON.stringify(data.request.headers, null, 2)}</code></pre>
+                                </div>
+                                ${data.request.body ? `
+                                <div>
+                                    <strong>Body:</strong>
+                                    <pre><code>${JSON.stringify(data.request.body, null, 2)}</code></pre>
+                                </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="response-${data.item_name}" role="tabpanel">
+                            <div class="response-info">
+                                <div class="mb-2">
+                                    <span class="badge bg-${data.response.status >= 200 && data.response.status < 300 ? 'success' : 'danger'}">${data.response.status}</span>
+                                    <span class="badge bg-secondary">${data.response.statusText}</span>
+                                </div>
+                                <div class="mb-2">
+                                    <strong>Headers:</strong>
+                                    <pre><code>${JSON.stringify(data.response.headers, null, 2)}</code></pre>
+                                </div>
+                                <div>
+                                    <strong>Body:</strong>
+                                    <pre><code>${JSON.stringify(data.response.body, null, 2)}</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="test-script-${data.item_name}" role="tabpanel">
+                            <div class="test-script">
+                                ${data.test_script ? `
+                                <div class="mb-2">
+                                    <strong>스크립트:</strong>
+                                    <pre><code>${data.test_script}</code></pre>
+                                </div>
+                                ` : ''}
+                                ${data.test_results ? `
+                                <div>
+                                    <strong>결과:</strong>
+                                    <pre><code>${data.test_results.map(result => 
+                                        `<span class="${result.passed ? 'passed' : 'failed'}">${result.message}</span>`
+                                    ).join('\n')}</code></pre>
+                                </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             `;
             
@@ -324,7 +554,9 @@
         document.getElementById('runTestBtn').addEventListener('click', () => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 const collectionId = document.getElementById('collectionSelect').value;
-                if (!collectionId) return;
+                const environmentId = document.getElementById('environmentSelect').value;
+                const testDataId = document.getElementById('testDataSelect').value;
+                if (!collectionId || !environmentId || !testDataId) return;
                 
                 ws.send(JSON.stringify({
                     message_type: 'request',
@@ -332,7 +564,9 @@
                         action: 'run_test',
                         request_id: Date.now().toString(),
                         params: {
-                            collection_id: parseInt(collectionId)
+                            collection_id: parseInt(collectionId),
+                            environment_id: parseInt(environmentId),
+                            test_data_id: parseInt(testDataId)
                         }
                     }
                 }));
@@ -341,6 +575,8 @@
 
         connectWebSocket();
         loadCollections();
+        loadEnvironments();
+        loadTestData();
     </script>
 </body>
 </html> 
