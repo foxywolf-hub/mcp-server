@@ -18,6 +18,7 @@ class PostmanCollection(Base):
     user = relationship("User", back_populates="postman_collections")
     environments = relationship("PostmanEnvironment", back_populates="collection")
     test_data = relationship("PostmanTestData", back_populates="collection")
+    test_runs = relationship("TestRun", back_populates="collection")
 
 class PostmanEnvironment(Base):
     __tablename__ = "postman_environment"
@@ -32,6 +33,7 @@ class PostmanEnvironment(Base):
     
     # 관계 정의
     collection = relationship("PostmanCollection", back_populates="environments")
+    test_runs = relationship("TestRun", back_populates="environment")
 
 class PostmanTestData(Base):
     __tablename__ = "postman_test_data"
@@ -45,4 +47,5 @@ class PostmanTestData(Base):
     collection_id = Column(Integer, ForeignKey("postman_collection.collection_id"), nullable=False)
     
     # 관계 정의
-    collection = relationship("PostmanCollection", back_populates="test_data") 
+    collection = relationship("PostmanCollection", back_populates="test_data")
+    test_runs = relationship("TestRun", back_populates="test_data") 

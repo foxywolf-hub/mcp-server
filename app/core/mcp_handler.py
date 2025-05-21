@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.mcp_protocol import mcp_protocol
 from app.core.postman_handler import postman_handler
+from app.core.test_handler import test_handler
 from app.api import deps
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,10 @@ class MCPHandler:
         self.register_handler("upload_collection", self._handle_upload_collection)
         self.register_handler("upload_environment", self._handle_upload_environment)
         self.register_handler("upload_test_data", self._handle_upload_test_data)
+        
+        # 테스트 관련 작업 핸들러 등록
+        self.register_handler("run_test", self._handle_run_test)
+        self.register_handler("get_test_run", self._handle_get_test_run)
     
     def register_handler(self, action: str, handler: Callable[[Dict[str, Any], WebSocket], Awaitable[Dict[str, Any]]]):
         """
@@ -252,6 +257,66 @@ class MCPHandler:
                 return result
         except Exception as e:
             logger.error(f"Error handling upload_test_data: {str(e)}")
+            raise
+    
+    async def _handle_run_test(self, params: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
+        """
+        테스트 실행 처리
+        
+        :param params: 요청 파라미터
+        :param websocket: WebSocket 연결
+        :return: 처리 결과
+        """
+        try:
+            # 파라미터 검증
+            required_params = ["collection_id"]
+            for param in required_params:
+                if param not in params:
+                    raise ValueError(f"Missing required parameter: {param}")
+            
+            # 데이터베이스 세션 생성
+            async with deps.get_db() as db:
+                # 테스트 실행
+                result = await test_handler.run_test(
+                    db=db,
+                    collection_id=params["collection_id"],
+                    environment_id=params.get("environment_id"),
+                    test_data_id=params.get("test_data_id"),
+                    user_id=params.get("user_id", 1)  # 기본값 1 (임시)
+                )
+                
+                return result
+        except Exception as e:
+            logger.error(f"Error handling run_test: {str(e)}")
+            raise
+    
+    async def _handle_get_test_run(self, params: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
+        """
+        테스트 실행 결과 조회 처리
+        
+        :param params: 요청 파라미터
+        :param websocket: WebSocket 연결
+        :return: 처리 결과
+        """
+        try:
+            # 파라미터 검증
+            required_params = ["test_run_id"]
+            for param in required_params:
+                if param not in params:
+                    raise ValueError(f"Missing required parameter: {param}")
+            
+            # 데이터베이스 세션 생성
+            async with deps.get_db() as db:
+                # 테스트 실행 결과 조회
+                result = await test_handler.get_test_run(
+                    db=db,
+                    test_run_id=params["test_run_id"],
+                    user_id=params.get("user_id", 1)  # 기본값 1 (임시)
+                )
+                
+                return result
+        except Exception as e:
+            logger.error(f"Error handling get_test_run: {str(e)}")
             raise
 
 # 싱글톤 인스턴스
